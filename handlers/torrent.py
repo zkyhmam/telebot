@@ -33,17 +33,18 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
     status_msg = await context.bot.send_message(chat_id=chat_id, text="🚀 جاري تحليل لينك التورنت... شد حيلك معانا! ⌛")
 
     try:
-        # إعداد مسار التحميل للمستخدم
+        # إعداد مسار التحميل مع التحقق من الصلاحيات
         download_path = os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id))
-        os.makedirs(download_path, exist_ok=True)
+        os.makedirs(download_path, exist_ok=True)  # إنشاء المجلد إذا لم يكن موجودًا
 
-        # إضافة التورنت إلى aria2
+        # إضافة التورنت إلى aria2 مع إعدادات محسنة
         options = {
             "dir": download_path,
-            "max-concurrent-downloads": "10",
-            "bt-max-peers": "100",
+            "max-concurrent-downloads": "20",  # زيادة التحميلات المتوازية
+            "bt-max-peers": "200",            # زيادة عدد الـ Peers
             "enable-dht": "true",
-            "bt-enable-lpd": "true"
+            "bt-enable-lpd": "true",
+            "seed-time": "0"                  # عدم التوقف للسيد بعد التحميل
         }
         download = aria2.add_magnet(magnet_link, options=options)
 
@@ -53,8 +54,8 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text="🔄 جاري تحميل الميتاداتا... استنى شوية 😎"
         )
 
-        # انتظار الحصول على الميتاداتا مع مهلة زمنية
-        timeout = 60  # 60 ثانية
+        # انتظار الميتاداتا مع مهلة زمنية وتشخيص
+        timeout = 60
         start_time = time.time()
         while not download.is_complete and not download.has_failed and download.total_length == 0:
             elapsed_time = time.time() - start_time
@@ -67,9 +68,10 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 )
                 aria2.remove([download])
                 return
-            print(f"Waiting for metadata - Elapsed: {elapsed_time:.1f}s, Status: {download.status}")
-            await asyncio.sleep(1)
             download.update()
+            print(f"Waiting for metadata - Elapsed: {elapsed_time:.1f}s, Status: {download.status}, "
+                  f"Peers: {download.connections}, Seeds: {download.num_seeders}")
+            await asyncio.sleep(1)
 
         torrent_name = download.name
         total_size = download.total_length
@@ -143,7 +145,7 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
         # إرسال الملفات
-        torrent_path = os.path.join(download_path, torrent_name)
+        torrent_path = download.dir  # استخدام المسار الفعلي من aria2
         files = [f for f in os.listdir(torrent_path) if os.path.isfile(os.path.join(torrent_path, f))]
 
         for i, file in enumerate(files):
@@ -256,7 +258,7 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         file_name = update.message.document.file_name
         download_path = os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id))
         file_path = os.path.join(download_path, file_name)
-        os.makedirs(download_path, exist_ok=True)
+        os.makedirs(download_path, exist_ok=True)  # إنشاء المجلد إذا لم يكن موجودًا
         await file.download_to_drive(file_path)
 
         await context.bot.edit_message_text(
@@ -265,17 +267,18 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             text="🔄 جاري معالجة ملف التورنت... استنى شوية 😎"
         )
 
-        # إضافة ملف التورنت إلى aria2
+        # إضافة ملف التورنت إلى aria2 مع إعدادات محسنة
         options = {
             "dir": download_path,
-            "max-concurrent-downloads": "10",
-            "bt-max-peers": "100",
+            "max-concurrent-downloads": "20",
+            "bt-max-peers": "200",
             "enable-dht": "true",
-            "bt-enable-lpd": "true"
+            "bt-enable-lpd": "true",
+            "seed-time": "0"
         }
         download = aria2.add_torrent(file_path, options=options)
 
-        # انتظار الحصول على معلومات التحميل
+        # انتظار المعلومات مع تشخيص
         timeout = 60
         start_time = time.time()
         while not download.is_complete and not download.has_failed and download.total_length == 0:
@@ -290,9 +293,10 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 aria2.remove([download])
                 os.remove(file_path)
                 return
-            print(f"Waiting for metadata - Elapsed: {elapsed_time:.1f}s, Status: {download.status}")
-            await asyncio.sleep(1)
             download.update()
+            print(f"Waiting for metadata - Elapsed: {elapsed_time:.1f}s, Status: {download.status}, "
+                  f"Peers: {download.connections}, Seeds: {download.num_seeders}")
+            await asyncio.sleep(1)
 
         torrent_name = download.name
         total_size = download.total_length
@@ -367,7 +371,7 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
         # إرسال الملفات
-        torrent_path = os.path.join(download_path, torrent_name)
+        torrent_path = download.dir  # استخدام المسار الفعلي من aria2
         files = [f for f in os.listdir(torrent_path) if os.path.isfile(os.path.join(torrent_path, f))]
 
         for i, file in enumerate(files):
