@@ -1,15 +1,24 @@
 import asyncio
 import os
 import time
-import libtorrent as lt
-from telegram import Update, InputMediaVideo, InputMediaDocument, constants
-from telegram.ext import ContextTypes, CallbackContext
+import aria2p
+from telegram import Update, constants
+from telegram.ext import ContextTypes
 from utils.data import get_user, add_download, update_download, update_user, update_daily_stats
 from utils.format import format_size, format_time
 from config import DEFAULT_DOWNLOAD_PATH, DELETION_PERIOD
 import ffmpeg
 import shutil
 from datetime import datetime
+
+# إعداد عميل aria2
+aria2 = aria2p.API(
+    aria2p.Client(
+        host="http://localhost",
+        port=6800,
+        secret=""  # إذا أضفت سرًا في aria2c، ضعه هنا
+    )
+)
 
 async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -24,27 +33,19 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
     status_msg = await context.bot.send_message(chat_id=chat_id, text="🚀 جاري تحليل لينك التورنت... شد حيلك معانا! ⌛")
 
     try:
-        # إنشاء جلسة مع إعدادات محسنة
-        ses = lt.session()
-        settings = ses.get_settings()
-        settings['connections_limit'] = 500  # زيادة الحد الأقصى للاتصالات
-        settings['download_rate_limit'] = 0  # بدون حد للتحميل
-        settings['upload_rate_limit'] = 0    # بدون حد للرفع
-        settings['active_downloads'] = 10    # تحميلات نشطة متعددة
-        settings['active_seeds'] = 10        # Seeds نشطة
-        settings['enable_dht'] = True        # تفعيل DHT لاكتشاف المزيد من Peers
-        # حذف 'enable_utp' لأنه غير مدعوم
-        ses.apply_settings(settings)
-        ses.listen_on(6881, 6891)
+        # إعداد مسار التحميل للمستخدم
+        download_path = os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id))
+        os.makedirs(download_path, exist_ok=True)
 
-        params = {
-            'save_path': os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id)),
-            'storage_mode': lt.storage_mode_t(2),  # lt.storage_mode_t.storage_mode_sparse
-            'url': magnet_link
+        # إضافة التورنت إلى aria2
+        options = {
+            "dir": download_path,
+            "max-concurrent-downloads": "10",
+            "bt-max-peers": "100",
+            "enable-dht": "true",
+            "bt-enable-lpd": "true"
         }
-
-        handle = lt.add_magnet_uri(ses, magnet_link, params)
-        ses.start_dht()
+        download = aria2.add_magnet(magnet_link, options=options)
 
         await context.bot.edit_message_text(
             chat_id=chat_id,
@@ -52,71 +53,79 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text="🔄 جاري تحميل الميتاداتا... استنى شوية 😎"
         )
 
-        while not handle.has_metadata():
+        # انتظار الحصول على الميتاداتا مع مهلة زمنية
+        timeout = 60  # 60 ثانية
+        start_time = time.time()
+        while not download.is_complete and not download.has_failed and download.total_length == 0:
+            elapsed_time = time.time() - start_time
+            if elapsed_time > timeout:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=status_msg.message_id,
+                    text="❌ *فشل في تحميل الميتاداتا* ❌\n\n⚠️ السبب: ما فيش رد من الـ Peers أو الـ Seeders. جرب لينك تاني 🧐",
+                    parse_mode=constants.ParseMode.MARKDOWN
+                )
+                aria2.remove([download])
+                return
+            print(f"Waiting for metadata - Elapsed: {elapsed_time:.1f}s, Status: {download.status}")
             await asyncio.sleep(1)
+            download.update()
 
-        torinfo = handle.get_torrent_info()
-        torrent_name = torinfo.name()
+        torrent_name = download.name
+        total_size = download.total_length
 
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text=f"🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torinfo.total_size())}\n🔄 جاري بدء التحميل...",
+            text=f"🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(total_size)}\n🔄 جاري بدء التحميل...",
             parse_mode=constants.ParseMode.MARKDOWN
         )
 
-        if torinfo.total_size() > user['max_download_size']:
+        if total_size > user['max_download_size']:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_msg.message_id,
-                text=f"⚠️ *حجم التورنت أكبر من الحد المسموح* ⚠️\n\n📝 اسم التورنت: {torrent_name}\n📦 حجم التورنت: {format_size(torinfo.total_size())}\n📏 الحد الأقصى المسموح: {format_size(user['max_download_size'])}\n\nاتواصل مع الأدمن لو محتاج تزود المساحة 😉",
+                text=f"⚠️ *حجم التورنت أكبر من الحد المسموح* ⚠️\n\n📝 اسم التورنت: {torrent_name}\n📦 حجم التورنت: {format_size(total_size)}\n📏 الحد الأقصى المسموح: {format_size(user['max_download_size'])}\n\nاتواصل مع الأدمن لو محتاج تزود المساحة 😉",
                 parse_mode=constants.ParseMode.MARKDOWN
             )
-            ses.remove_torrent(handle)
+            aria2.remove([download])
             return
 
-        download = {
-            'id': str(handle.info_hash()),
+        download_info = {
+            'id': download.gid,
             'user_id': user_id,
             'file_name': torrent_name,
-            'file_size': torinfo.total_size(),
+            'file_size': total_size,
             'magnet_link': magnet_link,
             'download_date': datetime.now(),
             'status': 'downloading'
         }
-        add_download(download)
+        add_download(download_info)
 
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=status_msg.message_id,
-            text=f"🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torinfo.total_size())}\n🔄 جاري التحميل...",
-            parse_mode=constants.ParseMode.MARKDOWN
-        )
         start_time = time.time()
         last_update = start_time
         downloaded_before = 0
 
-        while handle.status().state != lt.torrent_status.seeding:
-            s = handle.status()
-
-            # طباعة عدد الـ Seeders وPeers للتشخيص
-            print(f"Seeders: {s.num_seeds}, Peers: {s.num_peers}")
+        while not download.is_complete:
+            download.update()
+            if download.has_failed:
+                raise Exception(f"فشل التحميل: {download.error_message}")
 
             now = time.time()
             time_diff = now - last_update
-            downloaded = s.total_done
+            downloaded = download.completed_length
             download_diff = downloaded - downloaded_before
             speed = download_diff / time_diff if time_diff > 0 else 0
 
-            progress = s.progress * 100
-            eta = (torinfo.total_size() - downloaded) / speed if speed > 0 else 0
+            progress = (downloaded / total_size) * 100 if total_size > 0 else 0
+            eta = (total_size - downloaded) / speed if speed > 0 else 0
             eta_formatted = format_time(eta)
 
             try:
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=status_msg.message_id,
-                    text=f"🚀 *جاري تحميل التورنت...* ⚡\n\n📝 الاسم: `{torrent_name}`\n▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢\n\n🔗 الحجم: {format_size(downloaded)} | {format_size(torinfo.total_size())}\n⏳️ اكتمل: {progress:.2f}%\n🚀 السرعة: {format_size(speed)}/s\n⏰️ المدة المتبقية: {eta_formatted}",
+                    text=f"🚀 *جاري تحميل التورنت...* ⚡\n\n📝 الاسم: `{torrent_name}`\n▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢\n\n🔗 الحجم: {format_size(downloaded)} | {format_size(total_size)}\n⏳️ اكتمل: {progress:.2f}%\n🚀 السرعة: {format_size(speed)}/s\n⏰️ المدة المتبقية: {eta_formatted}",
                     parse_mode=constants.ParseMode.MARKDOWN
                 )
             except Exception as e:
@@ -124,25 +133,23 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
             last_update = now
             downloaded_before = downloaded
-
             await asyncio.sleep(3)
 
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text=f"✅ *تم تحميل التورنت بنجاح!* 🎉\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torinfo.total_size())}\n⏱ المدة: {format_time(time.time() - start_time)}\n\n🔄 جاري معالجة الملفات وإرسالها... 🚀",
+            text=f"✅ *تم تحميل التورنت بنجاح!* 🎉\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(total_size)}\n⏱ المدة: {format_time(time.time() - start_time)}\n\n🔄 جاري معالجة الملفات وإرسالها... 🚀",
             parse_mode=constants.ParseMode.MARKDOWN
         )
 
-        # Send files
-        torrent_path = os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id), torrent_name)
+        # إرسال الملفات
+        torrent_path = os.path.join(download_path, torrent_name)
         files = [f for f in os.listdir(torrent_path) if os.path.isfile(os.path.join(torrent_path, f))]
 
         for i, file in enumerate(files):
             file_path = os.path.join(torrent_path, file)
             file_size = os.path.getsize(file_path)
 
-            # Skip very small files (usually system files)
             if file_size < 10000:
                 print(f"Skipping small file: {file}")
                 continue
@@ -200,27 +207,29 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     chat_id=chat_id,
                     text=f"⚠️ حصل خطأ أثناء إرسال الملف: {file}\n{e}"
                 )
-        download['status'] = 'completed'
-        update_download(download)
+
+        download_info['status'] = 'completed'
+        update_download(download_info)
         update_user({
             'user_id': user_id,
             'total_downloads': user['total_downloads'] + 1,
             'last_activity': datetime.now()
         })
 
-        update_daily_stats(0, 1, torinfo.total_size())
+        update_daily_stats(0, 1, total_size)
 
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"✅ *تم إرسال كل الملفات بنجاح!* 🎉\n\n📝 اسم التورنت: {torrent_name}\n📦 الحجم الكلي: {format_size(torinfo.total_size())}\n📁 عدد الملفات: {len(files)}\n\nشكراً لاستخدامك البوت المصري 🇪🇬 لو عايز تحمل حاجة تانية ابعت لينك جديد 🚀",
+            text=f"✅ *تم إرسال كل الملفات بنجاح!* 🎉\n\n📝 اسم التورنت: {torrent_name}\n📦 الحجم الكلي: {format_size(total_size)}\n📁 عدد الملفات: {len(files)}\n\nشكراً لاستخدامك البوت المصري 🇪🇬 لو عايز تحمل حاجة تانية ابعت لينك جديد 🚀",
             parse_mode=constants.ParseMode.MARKDOWN
         )
-        # Clean up
+
+        # تنظيف
         try:
-            ses.remove_torrent(handle)
-            shutil.rmtree(os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id)))
+            aria2.remove([download])
+            shutil.rmtree(download_path)
         except Exception as e:
-            print(f'Failed to remove the torrent or directory: {e}')
+            print(f"Failed to clean up: {e}")
 
     except Exception as e:
         await context.bot.edit_message_text(
@@ -236,105 +245,111 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
 
     user = get_user(user_id)
-
     if not user or user['is_banned'] or not user['is_active']:
         await context.bot.send_message(chat_id=chat_id, text="⚠️ معلش، مش مسموح ليك تستخدم البوت دلوقتي")
         return
 
-    status_msg = await context.bot.send_message(chat_id=chat_id, text='🚀 جاري تحميل ملف التورنت... شد حيلك معانا! ⌛')
+    status_msg = await context.bot.send_message(chat_id=chat_id, text="🚀 جاري تحميل ملف التورنت... شد حيلك معانا! ⌛")
 
     try:
         file = await context.bot.get_file(update.message.document.file_id)
         file_name = update.message.document.file_name
-        file_path = os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id), file_name)
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)  # Create user directory
+        download_path = os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id))
+        file_path = os.path.join(download_path, file_name)
+        os.makedirs(download_path, exist_ok=True)
         await file.download_to_drive(file_path)
 
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text='🔄 جاري معالجة ملف التورنت... استنى شوية 😎',
+            text="🔄 جاري معالجة ملف التورنت... استنى شوية 😎"
         )
 
-        # إنشاء جلسة مع إعدادات محسنة
-        ses = lt.session()
-        settings = ses.get_settings()
-        settings['connections_limit'] = 500
-        settings['download_rate_limit'] = 0
-        settings['upload_rate_limit'] = 0
-        settings['active_downloads'] = 10
-        settings['active_seeds'] = 10
-        settings['enable_dht'] = True
-        # حذف 'enable_utp' لأنه غير مدعوم
-        ses.apply_settings(settings)
-        ses.listen_on(6881, 6891)
-
-        info = lt.torrent_info(file_path)
-        torrent_name = info.name()
-
-        params = {
-            'save_path': os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id)),
-            'storage_mode': lt.storage_mode_t(2),  # lt.storage_mode_t.storage_mode_sparse
-            'ti': info
+        # إضافة ملف التورنت إلى aria2
+        options = {
+            "dir": download_path,
+            "max-concurrent-downloads": "10",
+            "bt-max-peers": "100",
+            "enable-dht": "true",
+            "bt-enable-lpd": "true"
         }
+        download = aria2.add_torrent(file_path, options=options)
 
-        handle = ses.add_torrent(params)
-        ses.start_dht()
+        # انتظار الحصول على معلومات التحميل
+        timeout = 60
+        start_time = time.time()
+        while not download.is_complete and not download.has_failed and download.total_length == 0:
+            elapsed_time = time.time() - start_time
+            if elapsed_time > timeout:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=status_msg.message_id,
+                    text="❌ *فشل في تحميل الميتاداتا* ❌\n\n⚠️ السبب: ما فيش رد من الـ Peers أو الـ Seeders. جرب ملف تاني 🧐",
+                    parse_mode=constants.ParseMode.MARKDOWN
+                )
+                aria2.remove([download])
+                os.remove(file_path)
+                return
+            print(f"Waiting for metadata - Elapsed: {elapsed_time:.1f}s, Status: {download.status}")
+            await asyncio.sleep(1)
+            download.update()
+
+        torrent_name = download.name
+        total_size = download.total_length
 
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text=f'🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(info.total_size())}\n🔄 جاري بدء التحميل...',
+            text=f"🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(total_size)}\n🔄 جاري بدء التحميل...",
             parse_mode=constants.ParseMode.MARKDOWN
         )
 
-        if info.total_size() > user['max_download_size']:
+        if total_size > user['max_download_size']:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_msg.message_id,
-                text=f"⚠️ *حجم التورنت أكبر من الحد المسموح* ⚠️\n\n📝 اسم التورنت: {torrent_name}\n📦 حجم التورنت: {format_size(info.total_size())}\n📏 الحد الأقصى المسموح: {format_size(user['max_download_size'])}\n\nاتواصل مع الأدمن لو محتاج تزود المساحة 😉",
+                text=f"⚠️ *حجم التورنت أكبر من الحد المسموح* ⚠️\n\n📝 اسم التورنت: {torrent_name}\n📦 حجم التورنت: {format_size(total_size)}\n📏 الحد الأقصى المسموح: {format_size(user['max_download_size'])}\n\nاتواصل مع الأدمن لو محتاج تزود المساحة 😉",
                 parse_mode=constants.ParseMode.MARKDOWN
             )
-            ses.remove_torrent(handle)
-            os.remove(file_path)  # Clean up the .torrent file
+            aria2.remove([download])
+            os.remove(file_path)
             return
 
-        download = {
-            'id': str(handle.info_hash()),
+        download_info = {
+            'id': download.gid,
             'user_id': user_id,
             'file_name': torrent_name,
-            'file_size': info.total_size(),
-            'magnet_link': None,  # No magnet link for .torrent files
+            'file_size': total_size,
+            'magnet_link': None,
             'download_date': datetime.now(),
             'status': 'downloading'
         }
-        add_download(download)
+        add_download(download_info)
 
         start_time = time.time()
         last_update = start_time
         downloaded_before = 0
 
-        while handle.status().state != lt.torrent_status.seeding:
-            s = handle.status()
-
-            # طباعة عدد الـ Seeders وPeers للتشخيص
-            print(f"Seeders: {s.num_seeds}, Peers: {s.num_peers}")
+        while not download.is_complete:
+            download.update()
+            if download.has_failed:
+                raise Exception(f"فشل التحميل: {download.error_message}")
 
             now = time.time()
             time_diff = now - last_update
-            downloaded = s.total_done
+            downloaded = download.completed_length
             download_diff = downloaded - downloaded_before
             speed = download_diff / time_diff if time_diff > 0 else 0
 
-            progress = s.progress * 100
-            eta = (info.total_size() - downloaded) / speed if speed > 0 else 0
+            progress = (downloaded / total_size) * 100 if total_size > 0 else 0
+            eta = (total_size - downloaded) / speed if speed > 0 else 0
             eta_formatted = format_time(eta)
 
             try:
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=status_msg.message_id,
-                    text=f"🚀 *جاري تحميل التورنت...* ⚡\n\n📝 الاسم: `{torrent_name}`\n▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢\n\n🔗 الحجم: {format_size(downloaded)} | {format_size(info.total_size())}\n⏳️ اكتمل: {progress:.2f}%\n🚀 السرعة: {format_size(speed)}/s\n⏰️ المدة المتبقية: {eta_formatted}",
+                    text=f"🚀 *جاري تحميل التورنت...* ⚡\n\n📝 الاسم: `{torrent_name}`\n▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢\n\n🔗 الحجم: {format_size(downloaded)} | {format_size(total_size)}\n⏳️ اكتمل: {progress:.2f}%\n🚀 السرعة: {format_size(speed)}/s\n⏰️ المدة المتبقية: {eta_formatted}",
                     parse_mode=constants.ParseMode.MARKDOWN
                 )
             except Exception as e:
@@ -342,25 +357,23 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
 
             last_update = now
             downloaded_before = downloaded
-
             await asyncio.sleep(3)
 
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text=f"✅ *تم تحميل التورنت بنجاح!* 🎉\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(info.total_size())}\n⏱ المدة: {format_time(time.time() - start_time)}\n\n🔄 جاري معالجة الملفات وإرسالها... 🚀",
+            text=f"✅ *تم تحميل التورنت بنجاح!* 🎉\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(total_size)}\n⏱ المدة: {format_time(time.time() - start_time)}\n\n🔄 جاري معالجة الملفات وإرسالها... 🚀",
             parse_mode=constants.ParseMode.MARKDOWN
         )
 
-        # Send files
-        torrent_path = os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id), torrent_name)
+        # إرسال الملفات
+        torrent_path = os.path.join(download_path, torrent_name)
         files = [f for f in os.listdir(torrent_path) if os.path.isfile(os.path.join(torrent_path, f))]
 
         for i, file in enumerate(files):
             file_path = os.path.join(torrent_path, file)
             file_size = os.path.getsize(file_path)
 
-            # Skip very small files (usually system files)
             if file_size < 10000:
                 print(f"Skipping small file: {file}")
                 continue
@@ -419,35 +432,35 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                     text=f"⚠️ حصل خطأ أثناء إرسال الملف: {file}\n{e}"
                 )
 
-        download['status'] = 'completed'
-        update_download(download)
+        download_info['status'] = 'completed'
+        update_download(download_info)
         update_user({
             'user_id': user_id,
             'total_downloads': user['total_downloads'] + 1,
             'last_activity': datetime.now()
         })
 
-        update_daily_stats(0, 1, info.total_size())
+        update_daily_stats(0, 1, total_size)
 
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"✅ *تم إرسال كل الملفات بنجاح!* 🎉\n\n📝 اسم التورنت: {torrent_name}\n📦 الحجم الكلي: {format_size(info.total_size())}\n📁 عدد الملفات: {len(files)}\n\nشكراً لاستخدامك البوت المصري 🇪🇬 لو عايز تحمل حاجة تانية ابعت لينك جديد 🚀",
+            text=f"✅ *تم إرسال كل الملفات بنجاح!* 🎉\n\n📝 اسم التورنت: {torrent_name}\n📦 الحجم الكلي: {format_size(total_size)}\n📁 عدد الملفات: {len(files)}\n\nشكراً لاستخدامك البوت المصري 🇪🇬 لو عايز تحمل حاجة تانية ابعت لينك جديد 🚀",
             parse_mode=constants.ParseMode.MARKDOWN
         )
 
-        # Clean up
+        # تنظيف
         try:
-            ses.remove_torrent(handle)
-            os.remove(file_path)  # Delete the .torrent file
-            shutil.rmtree(os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id)))
+            aria2.remove([download])
+            os.remove(file_path)
+            shutil.rmtree(download_path)
         except Exception as e:
-            print(f'Failed to remove the torrent or directory: {e}')
+            print(f"Failed to clean up: {e}")
 
     except Exception as e:
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text=f"❌ *فشل في تحميل ملف التورنت* ❌\n\n⚠️ الخطأ: {e}\n\nحاول تاني بملف تاني 🧐",
+            text=f"❌ *فشل في تحميل التورنت* ❌\n\n⚠️ الخطأ: {e}\n\nتأكد أن الملف صحيح وجرب تاني 🧐",
             parse_mode=constants.ParseMode.MARKDOWN
         )
         print(f"An error occurred: {e}")
