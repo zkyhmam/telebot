@@ -28,16 +28,16 @@ def sanitize_filename(filename):
         filename = filename.replace(char, '_')
     return filename
 
-# دالة لإعادة المحاولة مع تأخير
-async def retry_with_backoff(func, max_retries=3, initial_backoff=1):
+# دالة لإعادة المحاولة (متزامنة)
+def retry_with_backoff(func, max_retries=3, initial_backoff=1):
     backoff = initial_backoff
     for attempt in range(max_retries):
         try:
-            return await func()
+            return func()
         except Exception as e:
             if attempt == max_retries - 1:
                 raise e
-            await asyncio.sleep(backoff)
+            time.sleep(backoff)
             backoff *= 2
 
 # دالة لإرسال الملفات الكبيرة مع التقسيم
@@ -111,8 +111,8 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "check-integrity": "true"
         }
 
-        # إضافة التورنت مع إعادة المحاولة
-        download = await retry_with_backoff(lambda: aria2.add_magnet(magnet_link, options=options))
+        # إضافة التورنت باستخدام retry_with_backoff بدون await
+        download = retry_with_backoff(lambda: aria2.add_magnet(magnet_link, options=options))
 
         # انتظار الميتاداتا
         timeout = 60
@@ -267,7 +267,8 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             "check-integrity": "true"
         }
 
-        download = await retry_with_backoff(lambda: aria2.add_torrent(file_path, options=options))
+        # إضافة التورنت باستخدام retry_with_backoff بدون await
+        download = retry_with_backoff(lambda: aria2.add_torrent(file_path, options=options))
 
         timeout = 60
         start_time = time.time()
