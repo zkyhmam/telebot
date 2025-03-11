@@ -24,8 +24,19 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
     status_msg = await context.bot.send_message(chat_id=chat_id, text="🚀 جاري تحليل لينك التورنت... شد حيلك معانا! ⌛")
 
     try:
+        # إنشاء جلسة مع إعدادات محسنة
         ses = lt.session()
+        settings = ses.get_settings()
+        settings['connections_limit'] = 500  # زيادة الحد الأقصى للاتصالات
+        settings['download_rate_limit'] = 0  # بدون حد للتحميل
+        settings['upload_rate_limit'] = 0    # بدون حد للرفع
+        settings['active_downloads'] = 10    # تحميلات نشطة متعددة
+        settings['active_seeds'] = 10        # Seeds نشطة
+        settings['enable_dht'] = True        # تفعيل DHT لاكتشاف المزيد من Peers
+        settings['enable_utp'] = True        # تفعيل uTP لتحسين الأداء
+        ses.apply_settings(settings)
         ses.listen_on(6881, 6891)
+
         params = {
             'save_path': os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id)),
             'storage_mode': lt.storage_mode_t(2),  # lt.storage_mode_t.storage_mode_sparse
@@ -88,6 +99,9 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
         while handle.status().state != lt.torrent_status.seeding:
             s = handle.status()
 
+            # طباعة عدد الـ Seeders وPeers للتشخيص
+            print(f"Seeders: {s.num_seeds}, Peers: {s.num_peers}")
+
             now = time.time()
             time_diff = now - last_update
             downloaded = s.total_done
@@ -112,6 +126,7 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
             downloaded_before = downloaded
 
             await asyncio.sleep(3)
+
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
@@ -241,8 +256,19 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             text='🔄 جاري معالجة ملف التورنت... استنى شوية 😎',
         )
 
+        # إنشاء جلسة مع إعدادات محسنة
         ses = lt.session()
+        settings = ses.get_settings()
+        settings['connections_limit'] = 500
+        settings['download_rate_limit'] = 0
+        settings['upload_rate_limit'] = 0
+        settings['active_downloads'] = 10
+        settings['active_seeds'] = 10
+        settings['enable_dht'] = True
+        settings['enable_utp'] = True
+        ses.apply_settings(settings)
         ses.listen_on(6881, 6891)
+
         info = lt.torrent_info(file_path)
         torrent_name = info.name()
 
@@ -290,6 +316,9 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         while handle.status().state != lt.torrent_status.seeding:
             s = handle.status()
+
+            # طباعة عدد الـ Seeders وPeers للتشخيص
+            print(f"Seeders: {s.num_seeds}, Peers: {s.num_peers}")
 
             now = time.time()
             time_diff = now - last_update
