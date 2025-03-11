@@ -33,7 +33,7 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
         settings['active_downloads'] = 10    # تحميلات نشطة متعددة
         settings['active_seeds'] = 10        # Seeds نشطة
         settings['enable_dht'] = True        # تفعيل DHT لاكتشاف المزيد من Peers
-        settings['enable_utp'] = True        # تفعيل uTP لتحسين الأداء
+        # حذف 'enable_utp' لأنه غير مدعوم
         ses.apply_settings(settings)
         ses.listen_on(6881, 6891)
 
@@ -265,7 +265,7 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         settings['active_downloads'] = 10
         settings['active_seeds'] = 10
         settings['enable_dht'] = True
-        settings['enable_utp'] = True
+        # حذف 'enable_utp' لأنه غير مدعوم
         ses.apply_settings(settings)
         ses.listen_on(6881, 6891)
 
