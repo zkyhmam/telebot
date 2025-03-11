@@ -11,7 +11,6 @@ import ffmpeg
 import shutil
 from datetime import datetime
 
-
 async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
@@ -46,23 +45,21 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await asyncio.sleep(1)
 
         torinfo = handle.get_torrent_info()
-        torrent_file = lt.create_torrent(torinfo)
         torrent_name = torinfo.name()
 
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text=f"🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torrent_file.total_size())}\n🔄 جاري بدء التحميل...",
+            text=f"🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torinfo.total_size())}\n🔄 جاري بدء التحميل...",
             parse_mode=constants.ParseMode.MARKDOWN
         )
 
-        if torrent_file.total_size() > user['max_download_size']:
+        if torinfo.total_size() > user['max_download_size']:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_msg.message_id,
-                text=f"⚠️ *حجم التورنت أكبر من الحد المسموح* ⚠️\n\n📝 اسم التورنت: {torrent_name}\n📦 حجم التورنت: {format_size(torrent_file.total_size())}\n📏 الحد الأقصى المسموح: {format_size(user['max_download_size'])}\n\nاتواصل مع الأدمن لو محتاج تزود المساحة 😉",
+                text=f"⚠️ *حجم التورنت أكبر من الحد المسموح* ⚠️\n\n📝 اسم التورنت: {torrent_name}\n📦 حجم التورنت: {format_size(torinfo.total_size())}\n📏 الحد الأقصى المسموح: {format_size(user['max_download_size'])}\n\nاتواصل مع الأدمن لو محتاج تزود المساحة 😉",
                 parse_mode=constants.ParseMode.MARKDOWN
-
             )
             ses.remove_torrent(handle)
             return
@@ -71,7 +68,7 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
             'id': str(handle.info_hash()),
             'user_id': user_id,
             'file_name': torrent_name,
-            'file_size': torrent_file.total_size(),
+            'file_size': torinfo.total_size(),
             'magnet_link': magnet_link,
             'download_date': datetime.now(),
             'status': 'downloading'
@@ -81,13 +78,12 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text=f"🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torrent_file.total_size())}\n🔄 جاري التحميل...",
+            text=f"🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torinfo.total_size())}\n🔄 جاري التحميل...",
             parse_mode=constants.ParseMode.MARKDOWN
         )
         start_time = time.time()
         last_update = start_time
         downloaded_before = 0
-
 
         while handle.status().state != lt.torrent_status.seeding:
             s = handle.status()
@@ -99,18 +95,16 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
             speed = download_diff / time_diff if time_diff > 0 else 0
 
             progress = s.progress * 100
-            eta = (torrent_file.total_size() - downloaded) / speed if speed > 0 else 0
-            eta_formatted = format_time(eta)  # Use the correct function name
+            eta = (torinfo.total_size() - downloaded) / speed if speed > 0 else 0
+            eta_formatted = format_time(eta)
 
             try:
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=status_msg.message_id,
-                    text=f"🚀 *جاري تحميل التورنت...* ⚡\n\n📝 الاسم: `{torrent_name}`\n▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢\n\n🔗 الحجم: {format_size(downloaded)} | {format_size(torrent_file.total_size())}\n⏳️ اكتمل: {progress:.2f}%\n🚀 السرعة: {format_size(speed)}/s\n⏰️ المدة المتبقية: {eta_formatted}",
+                    text=f"🚀 *جاري تحميل التورنت...* ⚡\n\n📝 الاسم: `{torrent_name}`\n▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢\n\n🔗 الحجم: {format_size(downloaded)} | {format_size(torinfo.total_size())}\n⏳️ اكتمل: {progress:.2f}%\n🚀 السرعة: {format_size(speed)}/s\n⏰️ المدة المتبقية: {eta_formatted}",
                     parse_mode=constants.ParseMode.MARKDOWN
-
                 )
-
             except Exception as e:
                 print(f"Error updating status: {e}")
 
@@ -121,7 +115,7 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text=f"✅ *تم تحميل التورنت بنجاح!* 🎉\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torrent_file.total_size())}\n⏱ المدة: {format_time(time.time() - start_time)}\n\n🔄 جاري معالجة الملفات وإرسالها... 🚀",
+            text=f"✅ *تم تحميل التورنت بنجاح!* 🎉\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torinfo.total_size())}\n⏱ المدة: {format_time(time.time() - start_time)}\n\n🔄 جاري معالجة الملفات وإرسالها... 🚀",
             parse_mode=constants.ParseMode.MARKDOWN
         )
 
@@ -132,7 +126,6 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for i, file in enumerate(files):
             file_path = os.path.join(torrent_path, file)
             file_size = os.path.getsize(file_path)
-
 
             # Skip very small files (usually system files)
             if file_size < 10000:
@@ -200,22 +193,19 @@ async def handle_magnet_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
             'last_activity': datetime.now()
         })
 
-        update_daily_stats(0, 1, torrent_file.total_size())
+        update_daily_stats(0, 1, torinfo.total_size())
 
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"✅ *تم إرسال كل الملفات بنجاح!* 🎉\n\n📝 اسم التورنت: {torrent_name}\n📦 الحجم الكلي: {format_size(torrent_file.total_size())}\n📁 عدد الملفات: {len(files)}\n\nشكراً لاستخدامك البوت المصري 🇪🇬 لو عايز تحمل حاجة تانية ابعت لينك جديد 🚀",
+            text=f"✅ *تم إرسال كل الملفات بنجاح!* 🎉\n\n📝 اسم التورنت: {torrent_name}\n📦 الحجم الكلي: {format_size(torinfo.total_size())}\n📁 عدد الملفات: {len(files)}\n\nشكراً لاستخدامك البوت المصري 🇪🇬 لو عايز تحمل حاجة تانية ابعت لينك جديد 🚀",
             parse_mode=constants.ParseMode.MARKDOWN
         )
         # Clean up
         try:
-
             ses.remove_torrent(handle)
             shutil.rmtree(os.path.join(DEFAULT_DOWNLOAD_PATH, str(user_id)))
-
         except Exception as e:
             print(f'Failed to remove the torrent or directory: {e}')
-
 
     except Exception as e:
         await context.bot.edit_message_text(
@@ -254,7 +244,6 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         ses = lt.session()
         ses.listen_on(6881, 6891)
         info = lt.torrent_info(file_path)
-        torrent_file = lt.create_torrent(info)
         torrent_name = info.name()
 
         params = {
@@ -269,15 +258,15 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text=f'🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torrent_file.total_size())}\n🔄 جاري بدء التحميل...',
+            text=f'🚀 *تورنت جديد* 🚀\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(info.total_size())}\n🔄 جاري بدء التحميل...',
             parse_mode=constants.ParseMode.MARKDOWN
         )
 
-        if torrent_file.total_size() > user['max_download_size']:
+        if info.total_size() > user['max_download_size']:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_msg.message_id,
-                text=f"⚠️ *حجم التورنت أكبر من الحد المسموح* ⚠️\n\n📝 اسم التورنت: {torrent_name}\n📦 حجم التورنت: {format_size(torrent_file.total_size())}\n📏 الحد الأقصى المسموح: {format_size(user['max_download_size'])}\n\nاتواصل مع الأدمن لو محتاج تزود المساحة 😉",
+                text=f"⚠️ *حجم التورنت أكبر من الحد المسموح* ⚠️\n\n📝 اسم التورنت: {torrent_name}\n📦 حجم التورنت: {format_size(info.total_size())}\n📏 الحد الأقصى المسموح: {format_size(user['max_download_size'])}\n\nاتواصل مع الأدمن لو محتاج تزود المساحة 😉",
                 parse_mode=constants.ParseMode.MARKDOWN
             )
             ses.remove_torrent(handle)
@@ -288,7 +277,7 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             'id': str(handle.info_hash()),
             'user_id': user_id,
             'file_name': torrent_name,
-            'file_size': torrent_file.total_size(),
+            'file_size': info.total_size(),
             'magnet_link': None,  # No magnet link for .torrent files
             'download_date': datetime.now(),
             'status': 'downloading'
@@ -309,14 +298,14 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             speed = download_diff / time_diff if time_diff > 0 else 0
 
             progress = s.progress * 100
-            eta = (torrent_file.total_size() - downloaded) / speed if speed > 0 else 0
+            eta = (info.total_size() - downloaded) / speed if speed > 0 else 0
             eta_formatted = format_time(eta)
 
             try:
                 await context.bot.edit_message_text(
                     chat_id=chat_id,
                     message_id=status_msg.message_id,
-                    text=f"🚀 *جاري تحميل التورنت...* ⚡\n\n📝 الاسم: `{torrent_name}`\n▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢\n\n🔗 الحجم: {format_size(downloaded)} | {format_size(torrent_file.total_size())}\n⏳️ اكتمل: {progress:.2f}%\n🚀 السرعة: {format_size(speed)}/s\n⏰️ المدة المتبقية: {eta_formatted}",
+                    text=f"🚀 *جاري تحميل التورنت...* ⚡\n\n📝 الاسم: `{torrent_name}`\n▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢▢\n\n🔗 الحجم: {format_size(downloaded)} | {format_size(info.total_size())}\n⏳️ اكتمل: {progress:.2f}%\n🚀 السرعة: {format_size(speed)}/s\n⏰️ المدة المتبقية: {eta_formatted}",
                     parse_mode=constants.ParseMode.MARKDOWN
                 )
             except Exception as e:
@@ -330,7 +319,7 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=status_msg.message_id,
-            text=f"✅ *تم تحميل التورنت بنجاح!* 🎉\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(torrent_file.total_size())}\n⏱ المدة: {format_time(time.time() - start_time)}\n\n🔄 جاري معالجة الملفات وإرسالها... 🚀",
+            text=f"✅ *تم تحميل التورنت بنجاح!* 🎉\n\n📝 الاسم: `{torrent_name}`\n📦 الحجم: {format_size(info.total_size())}\n⏱ المدة: {format_time(time.time() - start_time)}\n\n🔄 جاري معالجة الملفات وإرسالها... 🚀",
             parse_mode=constants.ParseMode.MARKDOWN
         )
 
@@ -409,11 +398,11 @@ async def handle_torrent_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             'last_activity': datetime.now()
         })
 
-        update_daily_stats(0, 1, torrent_file.total_size())
+        update_daily_stats(0, 1, info.total_size())
 
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"✅ *تم إرسال كل الملفات بنجاح!* 🎉\n\n📝 اسم التورنت: {torrent_name}\n📦 الحجم الكلي: {format_size(torrent_file.total_size())}\n📁 عدد الملفات: {len(files)}\n\nشكراً لاستخدامك البوت المصري 🇪🇬 لو عايز تحمل حاجة تانية ابعت لينك جديد 🚀",
+            text=f"✅ *تم إرسال كل الملفات بنجاح!* 🎉\n\n📝 اسم التورنت: {torrent_name}\n📦 الحجم الكلي: {format_size(info.total_size())}\n📁 عدد الملفات: {len(files)}\n\nشكراً لاستخدامك البوت المصري 🇪🇬 لو عايز تحمل حاجة تانية ابعت لينك جديد 🚀",
             parse_mode=constants.ParseMode.MARKDOWN
         )
 
